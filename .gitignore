@@ -1,0 +1,20 @@
+.env
+
+# 中间产物不入 git：数据库、spool 缓冲、内容寻址的原始 blob。
+#
+# 注意这里写的是 data/* 而不是 data/ —— git 不会进入被排除的【目录】，
+# 写成 data/ 的话后面的 !data/export/ 反选会失效。必须排除目录内容。
+data/*
+*.duckdb
+*.duckdb.bak
+
+# data/export/ 里的报告与快照数据集【是交付物】，必须入库。
+# 把它埋在被忽略的目录里，等于交付了却没人找得到。
+!data/export/
+
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
