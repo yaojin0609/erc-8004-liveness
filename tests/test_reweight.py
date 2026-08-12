@@ -93,3 +93,44 @@ def test_top_subsampled_hosts_reports_sampling_fraction(conn):
     assert [h["host"] for h in top] == ["big.test"]      # 全探的不算被抽样
     assert top[0]["sample_frac"] == pytest.approx(Decimal("0.4"), abs=Decimal("0.001"))
     assert top[0]["proto_rate"] == pytest.approx(Decimal("0.5"), abs=Decimal("0.001"))
+
+
+# ------------------------------------------------------------ 双峰分布
+
+def test_bimodal_distribution_detects_two_peaks(conn):
+    """存活率若真是 host 属性，分布应压在两端而不是堆在中间。"""
+    from e8004.analysis.reweight import host_pass_distribution
+
+    for k in range(10):                      # 10 个几乎全通的 host
+        _add(conn, f"up{k}.test", 100, probed_ok=100, probed_fail=0, start=k * 1000)
+    for k in range(10):                      # 10 个几乎全不通的 host
+        _add(conn, f"down{k}.test", 100, probed_ok=0, probed_fail=100, start=50_000 + k * 1000)
+
+    d = host_pass_distribution(conn, probe_round=1)
+    assert d["near_full_hosts"] == 10
+    assert d["near_zero_hosts"] == 10
+    assert d["extreme_host_share"] == 1.0          # 全部落在两端
+    assert d["extreme_endpoint_share"] == 1.0
+
+
+def test_noisy_tiny_hosts_are_filtered_out(conn):
+    """只探到 1-2 个端点的 host 是噪声：3 个里通 1 个不是「33% 存活」。"""
+    from e8004.analysis.reweight import host_pass_distribution
+
+    _add(conn, "solid.test", 50, probed_ok=50, probed_fail=0, start=0)
+    _add(conn, "tiny.test", 2, probed_ok=1, probed_fail=1, start=90_000)
+
+    d = host_pass_distribution(conn, probe_round=1, min_probed=5)
+    assert d["hosts_considered"] == 1              # tiny 被滤掉
+    assert d["near_full_hosts"] == 1
+
+
+def test_largest_hosts_sorted_by_endpoint_count_not_sample(conn):
+    """按端点规模排，不是按探测样本数 —— 大 host 恰恰被抽样得最狠。"""
+    from e8004.analysis.reweight import largest_hosts
+
+    _add(conn, "big.test", 10_000, probed_ok=100, probed_fail=100, start=0)   # 探 200
+    _add(conn, "mid.test", 500, probed_ok=400, probed_fail=100, start=80_000)  # 探 500
+
+    top = largest_hosts(conn, probe_round=1)
+    assert [h["host"] for h in top] == ["big.test", "mid.test"]

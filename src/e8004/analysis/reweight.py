@@ -121,6 +121,57 @@ def reweight(conn, probe_round: int = 1) -> dict:
     return out
 
 
+def host_pass_distribution(conn, probe_round: int = 1, min_probed: int = 5,
+                           n_buckets: int = 10) -> dict:
+    """每个 host 的协议层通过率分布。
+
+    实测形态是**双峰**：host 要么几乎全通，要么几乎全不通，中间很空。
+    这说明「能不能握手」基本是 host（= 运营商）的属性，而不是单个 agent 的属性 ——
+    同一个 host 下成千上万个 agent 的探测结果高度一致，彼此几乎不提供额外信息。
+
+    `min_probed` 过滤掉只探到零星几个端点的 host：3 个里通过 1 个算 33%，
+    那是噪声不是形态。被过滤掉的 host 端点数很少，不影响结论，但会让
+    分布图干净很多。过滤阈值必须在报告里写明。
+    """
+    st = [s for s in strata(conn, probe_round) if (s["n_probed"] or 0) >= min_probed]
+    buckets = [{"lo": i / n_buckets, "hi": (i + 1) / n_buckets, "hosts": 0, "endpoints": 0}
+               for i in range(n_buckets)]
+    for s in st:
+        p = float(s["proto_ok"] or 0) / s["n_probed"]
+        idx = min(int(p * n_buckets), n_buckets - 1)
+        buckets[idx]["hosts"] += 1
+        buckets[idx]["endpoints"] += s["n_total"]
+
+    n_hosts = sum(b["hosts"] for b in buckets)
+    n_end = sum(b["endpoints"] for b in buckets)
+    lo_b, hi_b = buckets[0], buckets[-1]
+    extreme_hosts = lo_b["hosts"] + hi_b["hosts"]
+    extreme_end = lo_b["endpoints"] + hi_b["endpoints"]
+    return {
+        "min_probed": min_probed,
+        "hosts_considered": n_hosts,
+        "endpoints_considered": n_end,
+        "buckets": buckets,
+        "extreme_hosts": extreme_hosts,
+        "extreme_endpoints": extreme_end,
+        "extreme_host_share": (extreme_hosts / n_hosts) if n_hosts else 0.0,
+        "extreme_endpoint_share": (extreme_end / n_end) if n_end else 0.0,
+        "near_zero_hosts": lo_b["hosts"],
+        "near_zero_endpoints": lo_b["endpoints"],
+        "near_full_hosts": hi_b["hosts"],
+        "near_full_endpoints": hi_b["endpoints"],
+    }
+
+
+def largest_hosts(conn, probe_round: int = 1, limit: int = 12) -> list[dict]:
+    """按端点规模排序的 host 及其通过率 —— 双峰形态最直观的证据。"""
+    st = [s for s in strata(conn, probe_round) if (s["n_probed"] or 0) > 0]
+    for s in st:
+        s["proto_rate"] = Decimal(s["proto_ok"] or 0) / Decimal(s["n_probed"])
+        s["sample_frac"] = Decimal(s["n_probed"]) / Decimal(s["n_total"])
+    return sorted(st, key=lambda s: -s["n_total"])[:limit]
+
+
 def top_subsampled_hosts(conn, probe_round: int = 1, limit: int = 10) -> list[dict]:
     """被抽样最狠的 host —— 回权结论对它们最敏感，报告里要点名。"""
     st = [s for s in strata(conn, probe_round) if (s["n_probed"] or 0) > 0]

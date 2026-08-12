@@ -76,6 +76,65 @@ _LAYER_CN = {"dns_ok": "L3a DNS 可解析", "tcp_ok": "L3b TCP/TLS 可建连",
              "http_ok": "L3c HTTP 有响应", "proto_ok": "L3 协议层握手成功"}
 
 
+def _render_bimodal(conn, probe_round: int = 1) -> str:
+    """存活率在 host 之间的分布形态。
+
+    文案纪律（CLAUDE.md 硬约束 17）：只描述观察到的形态和它的统计含义，
+    不推断动机、不给任何 host 或 agent 贴标签。「端点未响应」的原因可以是
+    项目未上线、服务迁移、主动下线 —— 探测区分不了，报告就不许替读者断言。
+    """
+    from ..analysis.reweight import host_pass_distribution, largest_hosts
+
+    try:
+        d = host_pass_distribution(conn, probe_round)
+        big = largest_hosts(conn, probe_round, limit=12)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not d["hosts_considered"] or not big:
+        return ""
+
+    o = ["\n### 四之三、存活率在 host 之间呈双峰分布\n"]
+    o.append(
+        f"把每个 host 的协议层通过率单独算出来（只统计本轮探到 ≥{d['min_probed']} 个端点的 "
+        f"{d['hosts_considered']:,} 个 host，覆盖 {d['endpoints_considered']:,} 个端点），"
+        "分布不是集中在中间，而是**压在两端**：\n"
+    )
+    peak = max(b["hosts"] for b in d["buckets"]) or 1
+    o.append("| 该 host 的通过率 | host 数 | 覆盖端点数 | |")
+    o.append("|---|---:|---:|---|")
+    for b in d["buckets"]:
+        bar = "█" * max(0, round(28 * b["hosts"] / peak))
+        o.append(f"| {int(b['lo']*100)}–{int(b['hi']*100)}% | {b['hosts']:,} | "
+                 f"{b['endpoints']:,} | `{bar}` |")
+    o.append("")
+    o.append(
+        f"**{d['extreme_hosts']:,} 个 host（{100*d['extreme_host_share']:.1f}%）落在最两端的两档，"
+        f"它们覆盖了 {100*d['extreme_endpoint_share']:.1f}% 的端点。**"
+        f"其中通过率 ≥90% 的有 {d['near_full_hosts']:,} 个（{d['near_full_endpoints']:,} 个端点），"
+        f"≤10% 的有 {d['near_zero_hosts']:,} 个（{d['near_zero_endpoints']:,} 个端点）。\n"
+    )
+    o.append("规模最大的 host 更能看出这个形态：\n")
+    o.append("| host | 端点数 | 已探测 | 该 host 通过率 |")
+    o.append("|---|---:|---:|---:|")
+    for h in big:
+        o.append(f"| `{h['host']}` | {h['n_total']:,} | {h['n_probed']:,} | "
+                 f"{100*float(h['proto_rate']):.1f}% |")
+    o.append("")
+    o.append(
+        "**这意味着「某个 agent 是否可握手」几乎不是该 agent 的独立属性，而是它所在 host 的属性。**"
+        "同一个 host 下成千上万个身份的探测结果高度一致，彼此几乎不提供额外信息 —— "
+        "所以「有多少身份可握手」这个问题，在数量级上等价于"
+        "「哪些运营商的服务在快照时刻可达，以及各自注册了多少身份」。\n"
+    )
+    o.append(
+        "> 需要与端点主机集中度一并读：端点在 host 上高度集中（见集中度一节），"
+        "而 host 的通过率又是双峰的，两者叠加意味着**总体存活率对少数几个 host 的可达性极其敏感**。"
+        "单次快照无法区分「服务已下线」与「项目尚未上线 / 正在迁移 / 主动暂停」，"
+        "本报告不对任何 host 或身份作此推断；区分这些需要在不同时间点复跑同一个扫描器。\n"
+    )
+    return "\n".join(o)
+
+
 def _render_reweight(conn, probe_round: int = 1) -> str:
     """按 host 规模回权后的 L3 估计。
 
@@ -182,12 +241,26 @@ def render_markdown(conn, snapshot_id: str, *, limitations: list[str] | None = N
             f"> ⚠️ **本快照的探测覆盖率为 {probed:,}/{l2:,} = {_pct(probed, l2)}。**"
             f"L3 各层请只引用「占已探测」一列；「占 L0」列被覆盖率稀释，不代表存活率。\n"
         )
+    # L3-stable 需要第 2 轮。没跑第 2 轮时它必然是 0，但那是【未测量】不是
+    # 「0% 稳定存活」—— 表格里写 0 / 0.00% 会被直接读成后者，
+    # 这正是本仓反复防的「把没测到报成不存在」。所以显式标为不可用。
+    has_round2 = bool(conn.execute(
+        "SELECT count(*) FROM probe_attempt WHERE probe_round = 2").fetchone()[0])
     out.append("| 层级 | 定义 | 存活数 | 占 L0 | 占已探测 |\n|---|---|---:|---:|---:|")
     for key, label in LAYER_LABELS:
         v = S.get(key) or 0
+        if key == "l3_stable" and not has_round2:
+            out.append(f"| {key.upper()} | {label} | 不可用 | — | — |")
+            continue
         cond = _pct(v, probed) if (key in probe_layers and probed) else "—"
         out.append(f"| {key.upper()} | {label} | {v:,} | {_pct(v, l0)} | {cond} |")
     out.append("")
+    if not has_round2:
+        out.append(
+            "> `L3-stable` 标为**不可用**而不是 0：它要求间隔 ≥48h 的两轮探测都通过，"
+            "本快照只跑了第 1 轮。写成 0 会被读成「没有一个稳定存活」，"
+            "而实际含义是「尚未测量」。\n"
+        )
     out.append(
         f"\n单列旁支（**不计入 L3 失败**）：自我声明不活跃 {S['declared_inactive']:,} "
         f"（{_pct(S['declared_inactive'], l0)}），端点不可路由 {S['unroutable']:,} "
@@ -260,6 +333,7 @@ def render_markdown(conn, snapshot_id: str, *, limitations: list[str] | None = N
             out.append(f"| {lay} | {oc} | {n:,} |")
         out.append("")
         out.append(_render_reweight(conn))
+        out.append(_render_bimodal(conn))
 
     # ---- 队列
     ch = cohort_table(conn, snapshot_id)
