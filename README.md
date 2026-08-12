@@ -45,6 +45,13 @@ uv run e8004 bootstrap            # 地址验证 + 部署区块
 
 uv run e8004 snapshot-state --chain arbitrum --snapshot 2026-08-10
 uv run e8004 load snapshot-state
+
+uv run e8004 scan-mints           # 注册历史：Alchemy 链（见下节「注册时间」）
+uv run e8004 load scan-mints
+uv run e8004 scan-logs --chain celo   # 其余链走公共 RPC
+uv run e8004 load scan-logs
+uv run e8004 verify-coverage      # 【门槛】注册记录数必须等于普查数
+
 uv run e8004 fetch-uri            # agentURI 抓取（网络出口 A）
 uv run e8004 load fetch-uri
 uv run e8004 parse-cards
@@ -52,7 +59,38 @@ uv run e8004 probe --dry-run      # 全量探测前【必须】先核对量级
 uv run e8004 probe --round 1
 uv run e8004 load probe
 uv run e8004 funnel --snapshot 2026-08-10
+uv run e8004 report --snapshot 2026-08-10
 ```
+
+或者一条命令跑完除探测以外的全部：`./run_full.sh 2026-08-10`。
+探测刻意不在脚本里 —— 它要敲第三方服务器，必须由人显式发起。
+
+### `verify-coverage`：为什么它是门槛而不是可选项
+
+**RPC 端点静默丢日志，在本仓发生过三次，三次都「看起来成功了」：**
+
+| 链 | 表现 | 真相 |
+|---|---|---|
+| ethereum | 扫描正常完成 | `rpc.flashbots.net` 对历史区间返 `[]`，87% 是空的 |
+| scroll | `✓ 0 条日志` | 金丝雀够不到活动区间 → 端点校验**整个被跳过** |
+| celo | `✓` 但少 19.6% | 返回 **HTTP 200 + 截断的结果集**，重查同一区间就有 |
+
+共同点是**扫描自己发现不了**。所以对账不能依赖 RPC 是否诚实，只能用数据本身的性质：
+`agentId` 从 0 顺序递增 ⇒ 有注册记录的 agent 数必须等于普查数。
+纯 SQL，不碰网络，`--strict` 可挂进流水线当门槛。
+
+### 关于注册时间：两条路径
+
+没有一条路能覆盖全部 12 条链：
+
+- **`scan-mints`**（ethereum / base / bsc / arbitrum / polygon）：用 Alchemy 的
+  `alchemy_getAssetTransfers` 一次查全区间、翻页取回。**因为 Alchemy 免费档把
+  `eth_getLogs` 砍到 10 个区块跨度** —— 以太坊一条链就要 13.9 万次请求，
+  走事件日志在免费档下不可行。代价是拿不到 `agentURI`，所以结果写
+  `agent_mint` 而不是 `ev_registered`（往事件表里填 `''` 凑格式 = 造假数据）。
+- **`scan-logs`**（其余 7 条链）：公共 RPC 扫 `Registered` 事件本体，含 `agentURI`。
+  各链实测的跨度上限写在 `config/chains.toml` 里，**celo 必须用 2000**，
+  调大会触发静默截断。
 
 ## 关于 RPC：一个必须先讲清楚的坑
 

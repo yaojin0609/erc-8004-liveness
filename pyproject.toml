@@ -1,0 +1,44 @@
+[project]
+name = "e8004"
+version = "0.1.0"
+description = "ERC-8004 registered-identity liveness scanner and analyzer"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.27",
+    "eth-abi>=5.1",
+    "eth-utils>=4.1",
+    "eth-hash[pycryptodome]>=0.7",
+    "duckdb>=1.1",
+    "typer>=0.12",
+    "structlog>=24.1",
+    "aiodns>=3.2",
+    "python-dotenv>=1.0",
+    "rich>=13.7",
+    # 走操作系统证书库而不是 certifi 内置包。企业网络/本地代理做 TLS 拦截时，
+    # 没有它 httpx 会一律 CERTIFICATE_VERIFY_FAILED。
+    "truststore>=0.9",
+]
+
+[project.optional-dependencies]
+analysis = ["polars>=1.0", "networkx>=3.3", "matplotlib>=3.9"]
+
+[project.scripts]
+e8004 = "e8004.cli:app"
+
+[dependency-groups]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/e8004"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"

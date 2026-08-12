@@ -1,0 +1,163 @@
+{
+  "_README": [
+    "事件与函数 ABI，来源是 EIP-8004 规范正文（eips.ethereum.org/EIPS/eip-8004）。",
+    "",
+    "⚠️ 规范正文与实际部署的合约可能有出入。T0 (bootstrap) 必须做一次核对：",
+    "   从官方仓库 erc-8004-contracts 的 abis/ 目录拉实际 ABI，与本文件逐个事件比对。",
+    "   任何 indexed 标记或参数顺序不一致，以实际部署的 ABI 为准并更新本文件。",
+    "   —— 不做这一步，可能整个扫描解出来的都是垃圾。",
+    "",
+    "⚠️ topic0 一律用 signature 字段在运行时 keccak 计算，禁止硬编码 hash（CLAUDE.md 硬约束 6）。",
+    "",
+    "⚠️ 三个 string indexed 参数（MetadataSet.indexedMetadataKey、NewFeedback.indexedTag1）在 topic",
+    "   里存的是 keccak 哈希不是原文。可读值必须取 data 段的非 indexed 同名字段",
+    "   （metadataKey / tag1）。这是最容易写错、且错了不报错的地方。"
+  ],
+
+  "identity_registry": {
+    "events": [
+      {
+        "name": "Registered",
+        "signature": "Registered(uint256,string,address)",
+        "note": "L0 的基础。owner 是【注册时】的 owner，不是当前 owner —— 身份是 ERC-721，可转让。",
+        "inputs": [
+          { "name": "agentId",  "type": "uint256", "indexed": true },
+          { "name": "agentURI", "type": "string",  "indexed": false },
+          { "name": "owner",    "type": "address", "indexed": true }
+        ]
+      },
+      {
+        "name": "URIUpdated",
+        "signature": "URIUpdated(uint256,string,address)",
+        "inputs": [
+          { "name": "agentId",   "type": "uint256", "indexed": true },
+          { "name": "newURI",    "type": "string",  "indexed": false },
+          { "name": "updatedBy", "type": "address", "indexed": true }
+        ]
+      },
+      {
+        "name": "MetadataSet",
+        "signature": "MetadataSet(uint256,string,string,bytes)",
+        "note": "indexedMetadataKey 是 keccak 哈希；可读 key 取 metadataKey。agentWallet 等保留 key 走这里。",
+        "inputs": [
+          { "name": "agentId",            "type": "uint256", "indexed": true },
+          { "name": "indexedMetadataKey", "type": "string",  "indexed": true },
+          { "name": "metadataKey",        "type": "string",  "indexed": false },
+          { "name": "metadataValue",      "type": "bytes",   "indexed": false }
+        ]
+      },
+      {
+        "name": "Transfer",
+        "signature": "Transfer(address,address,uint256)",
+        "note": "标准 ERC-721。推导【当前】owner 必需；from=0x0 为 mint，to=0x0 为 burn。论文只用了注册时 owner，当前 owner 口径是本项目的增量。",
+        "inputs": [
+          { "name": "from",    "type": "address", "indexed": true },
+          { "name": "to",      "type": "address", "indexed": true },
+          { "name": "tokenId", "type": "uint256", "indexed": true }
+        ]
+      }
+    ],
+    "functions": [
+      { "name": "ownerOf",           "signature": "ownerOf(uint256)",           "outputs": ["address"], "note": "已销毁会 revert，用 Multicall3 的 allowFailure=true 承接" },
+      { "name": "tokenURI",          "signature": "tokenURI(uint256)",          "outputs": ["string"] },
+      { "name": "getAgentWallet",    "signature": "getAgentWallet(uint256)",    "outputs": ["address"], "note": "L5 经济活动分析的关键。链上可直接读，不必从 agent card 里找" },
+      { "name": "getMetadata",       "signature": "getMetadata(uint256,string)", "outputs": ["bytes"] },
+      { "name": "supportsInterface", "signature": "supportsInterface(bytes4)",  "outputs": ["bool"], "note": "T0 校验：传 0x80ac58cd (ERC-721) 应返回 true" }
+    ]
+  },
+
+  "reputation_registry": {
+    "events": [
+      {
+        "name": "NewFeedback",
+        "signature": "NewFeedback(uint256,address,uint64,int128,uint8,string,string,string,string,string,bytes32)",
+        "note": "value 是 int128【可以为负】，需按 valueDecimals 还原，全链路禁止 float。feedbackURI 指向链下反馈文件（含 proofOfPayment），是 Stage 07b 的输入。",
+        "inputs": [
+          { "name": "agentId",       "type": "uint256", "indexed": true },
+          { "name": "clientAddress", "type": "address", "indexed": true },
+          { "name": "feedbackIndex", "type": "uint64",  "indexed": false },
+          { "name": "value",         "type": "int128",  "indexed": false },
+          { "name": "valueDecimals", "type": "uint8",   "indexed": false },
+          { "name": "indexedTag1",   "type": "string",  "indexed": true },
+          { "name": "tag1",          "type": "string",  "indexed": false },
+          { "name": "tag2",          "type": "string",  "indexed": false },
+          { "name": "endpoint",      "type": "string",  "indexed": false },
+          { "name": "feedbackURI",   "type": "string",  "indexed": false },
+          { "name": "feedbackHash",  "type": "bytes32", "indexed": false }
+        ]
+      },
+      {
+        "name": "FeedbackRevoked",
+        "signature": "FeedbackRevoked(uint256,address,uint64)",
+        "note": "默认排除已撤销的反馈，但撤销率本身要报告",
+        "inputs": [
+          { "name": "agentId",       "type": "uint256", "indexed": true },
+          { "name": "clientAddress", "type": "address", "indexed": true },
+          { "name": "feedbackIndex", "type": "uint64",  "indexed": true }
+        ]
+      },
+      {
+        "name": "ResponseAppended",
+        "signature": "ResponseAppended(uint256,address,uint64,address,string,bytes32)",
+        "inputs": [
+          { "name": "agentId",       "type": "uint256", "indexed": true },
+          { "name": "clientAddress", "type": "address", "indexed": true },
+          { "name": "feedbackIndex", "type": "uint64",  "indexed": false },
+          { "name": "responder",     "type": "address", "indexed": true },
+          { "name": "responseURI",   "type": "string",  "indexed": false },
+          { "name": "responseHash",  "type": "bytes32", "indexed": false }
+        ]
+      }
+    ],
+    "functions": [
+      { "name": "getIdentityRegistry", "signature": "getIdentityRegistry()", "outputs": ["address"], "note": "T0 校验：返回值必须【逐字节等于】配置里的 IdentityRegistry 地址" }
+    ]
+  },
+
+  "validation_registry": {
+    "_note": "地址未在官方 README 列出，由 T0-2 发现。找不到就配 null 并全流程跳过，不阻塞主线。",
+    "events": [
+      {
+        "name": "ValidationRequest",
+        "signature": "ValidationRequest(address,uint256,string,bytes32)",
+        "inputs": [
+          { "name": "validatorAddress", "type": "address", "indexed": true },
+          { "name": "agentId",          "type": "uint256", "indexed": true },
+          { "name": "requestURI",       "type": "string",  "indexed": false },
+          { "name": "requestHash",      "type": "bytes32", "indexed": true }
+        ]
+      },
+      {
+        "name": "ValidationResponse",
+        "signature": "ValidationResponse(address,uint256,bytes32,uint8,string,bytes32,string)",
+        "note": "response 是 0–100，可当二值用（0 失败 / 100 通过）也可用中间值",
+        "inputs": [
+          { "name": "validatorAddress", "type": "address", "indexed": true },
+          { "name": "agentId",          "type": "uint256", "indexed": true },
+          { "name": "requestHash",      "type": "bytes32", "indexed": true },
+          { "name": "response",         "type": "uint8",   "indexed": false },
+          { "name": "responseURI",      "type": "string",  "indexed": false },
+          { "name": "responseHash",     "type": "bytes32", "indexed": false },
+          { "name": "tag",              "type": "string",  "indexed": false }
+        ]
+      }
+    ],
+    "functions": [
+      { "name": "getIdentityRegistry", "signature": "getIdentityRegistry()", "outputs": ["address"] }
+    ]
+  },
+
+  "multicall3": {
+    "_note": "0xca11bde05977b3631167028862be2a173976ca11，多链同址。批大小 500 起，遇 gas/size 报错减半。",
+    "functions": [
+      {
+        "name": "aggregate3",
+        "signature": "aggregate3((address,bool,bytes)[])",
+        "input_struct": { "target": "address", "allowFailure": "bool", "callData": "bytes" },
+        "outputs": ["(bool,bytes)[]"],
+        "output_struct": { "success": "bool", "returnData": "bytes" },
+        "note": "allowFailure 必须为 true —— 已销毁 agent 的 ownerOf 会 revert，不能让整批失败"
+      }
+    ]
+  }
+}
