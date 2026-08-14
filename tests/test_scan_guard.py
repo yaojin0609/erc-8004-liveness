@@ -106,3 +106,23 @@ def test_genuine_client_errors_are_not_range_errors():
 
     assert RpcError(-32602, "invalid argument 0", "eth_getLogs").is_range_error is False
     assert RpcError(-32601, "method not found", "eth_getLogs").is_range_error is False
+
+
+# --------------------------------------------- batch 上限：自适应而不是崩溃
+
+@pytest.mark.parametrize("msg,code,expected", [
+    ('{"code": -32014, "message": "maximum 10 calls in 1 batch"}', -32014, True),
+    ("batch size limit exceeded", -32000, True),
+    ("too many requests in batch", -32000, True),
+    ("block range is too large", -32000, False),      # 别和范围错误混淆
+    ("execution reverted", -32000, False),
+])
+def test_batch_too_large_detection(msg, code, expected):
+    """各家 RPC 的 batch 上限不同且不公布，只能按报错文本认。
+
+    实测 mainnet.base.org 只允许 10 个调用，超了返 -32014，
+    原来会让整条链的扫描崩掉（base 因此全军覆没一次）。
+    """
+    from e8004.rpc import RpcError
+
+    assert RpcError(code, msg, "batch").is_batch_too_large is expected

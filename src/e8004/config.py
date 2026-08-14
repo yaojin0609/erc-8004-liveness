@@ -55,6 +55,18 @@ class ChainConfig:
     max_log_range: int = 10_000
     deploy_block: int | None = None
     is_testnet: bool = False
+    # 日志扫描【专用】端点。留空则用 rpcs。
+    #
+    # 【为什么要单独一份】能做 eth_call 的端点未必能做 eth_getLogs，而且失败方式
+    # 是「静默地把扫描拖垮」而不是报错：Alchemy 免费档把 getLogs 砍到 10 个区块，
+    # 客户端会把它当成范围过大而不断折半，一路折到 10 区块然后以那个粒度爬完
+    # 139 万个区块。放进 rpcs 的轮转池里，只要轮到它就会拖垮整轮扫描。
+    # 所以扫日志时用实测能拿历史日志的那几个端点，别让轮转碰运气。
+    log_rpcs: tuple[str, ...] = ()
+
+    @property
+    def rpcs_for_logs(self) -> tuple[str, ...]:
+        return self.log_rpcs or self.rpcs
 
     @property
     def active(self) -> bool:
@@ -146,6 +158,12 @@ def load_config(root: Path | str = ".", require_identity: bool = True) -> Config
             except ConfigError:
                 # 该端点引用的 key 没配 —— 丢掉这个端点，不要因此让整条链或整个程序死掉
                 continue
+        log_rpcs: list[str] = []
+        for ep in c.get("log_rpcs") or []:
+            try:
+                log_rpcs.append(_expand(ep))
+            except ConfigError:
+                continue
         tier = c.get("tier", "off")
         if not rpcs and tier != "off":
             tier = "off"  # 一个可用端点都没有，只能关掉
@@ -160,6 +178,7 @@ def load_config(root: Path | str = ".", require_identity: bool = True) -> Config
                 max_log_range=int(c.get("max_log_range", 10_000)),
                 deploy_block=c.get("deploy_block"),
                 is_testnet=bool(c.get("is_testnet", False)),
+                log_rpcs=tuple(log_rpcs),
             )
         )
 

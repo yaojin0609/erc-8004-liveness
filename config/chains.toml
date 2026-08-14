@@ -51,6 +51,11 @@ confirmations = 12
 supports_finalized = true
 max_log_range = 10000
 deploy_block = 24339925      # 2026-01-29 主网上线；T0 仍需二分验证
+# 日志扫描专用端点：实测只有它能拿到部署期的历史日志
+#   publicnode 403 / drpc 400 / merkle 400 / meowrpc 500 / 1rpc 拒绝 / flashbots 504
+# Alchemy 【绝不能】进这个列表：免费档 getLogs 只给 10 个区块，客户端会把它
+# 当成范围过大而一路折半到 10，然后以那个粒度爬完 139 万个区块。
+log_rpcs = ["https://rpc.mevblocker.io"]
 
 [[chain]]
 name = "base"
@@ -68,6 +73,14 @@ rpcs = [
 confirmations = 30
 supports_finalized = true
 max_log_range = 10000
+# 同上：实测这三个能拿历史日志（tenderly 甚至允许 20 万跨度，但沿用 1 万 ——
+# celo 的教训是窗口太大会触发【静默截断】，端点返回 200 但结果集不全）
+log_rpcs = [
+  "https://mainnet.base.org",
+  "https://base.gateway.tenderly.co",
+]
+# base.drpc.org 金丝雀测试时可用，正式扫描时持续返 500 —— 剔除。
+# 公共 RPC 的可用性是【会随时间变的】，log_rpcs 需要定期复核。
 
 [[chain]]
 name = "bsc"

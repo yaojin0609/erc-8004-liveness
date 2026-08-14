@@ -76,6 +76,48 @@ _LAYER_CN = {"dns_ok": "L3a DNS 可解析", "tcp_ok": "L3b TCP/TLS 可建连",
              "http_ok": "L3c HTTP 有响应", "proto_ok": "L3 协议层握手成功"}
 
 
+_STABLE_CN = {"round1_ok": "第 1 轮通过", "round2_ok": "第 2 轮通过",
+              "stable_ok": "**两轮均通过（L3-stable）**"}
+
+
+def _render_stability(conn) -> str:
+    """两轮对照：把「那一刻恰好在线」和「稳定可达」分开。
+
+    这是整份报告里最该看的一张表 —— 单轮通过率无法排除临时故障，
+    只有同一端点相隔 ≥48h 两次都通过才叫稳定。
+    """
+    from ..analysis.reweight import reweight_stable
+
+    try:
+        r = reweight_stable(conn)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not r["endpoints_probed"] or not r["layers"]["round2_ok"]["ok_in_sample"]:
+        return ""
+
+    o = ["\n### 四之二之二、两轮对照：稳定可达 vs 那一刻在线\n"]
+    o.append("| 口径 | 样本内通过 | 占已探测 | 回权后估计 | 估计端点数 |")
+    o.append("|---|---:|---:|---:|---:|")
+    for k, label in _STABLE_CN.items():
+        d = r["layers"][k]
+        o.append(f"| {label} | {d['ok_in_sample']:,} | {100*float(d['raw_share']):.2f}% | "
+                 f"{100*float(d['weighted_share']):.2f}% | {float(d['weighted_endpoints']):,.0f} |")
+    o.append("")
+    o.append(
+        f"**持续率 {100*float(r['persistence']):.1f}%** —— 第 1 轮通过的端点里，"
+        f"相隔 ≥48 小时后仍有这么多在第 2 轮通过。"
+        "两轮的通过数几乎相同**且是同一批端点**（按端点逐个求交集，不是比较两轮的总数），"
+        "说明端点的可达性是一个**稳定的二分状态**，而不是时通时不通。\n"
+    )
+    o.append(
+        "> 这条对整份报告的可信度是关键的：单轮结果无法区分「服务稳定运行」与"
+        "「探测那一刻恰好在线」。持续率接近 100% 意味着本快照的 L3 结论"
+        "不是某个时刻的偶然采样。反过来说，它也意味着**未通过的端点同样稳定地未通过**，"
+        "但这仍然不能推断原因（未上线 / 迁移 / 暂停 / 已下线），见下节。\n"
+    )
+    return "\n".join(o)
+
+
 def _render_bimodal(conn, probe_round: int = 1) -> str:
     """存活率在 host 之间的分布形态。
 
@@ -333,6 +375,7 @@ def render_markdown(conn, snapshot_id: str, *, limitations: list[str] | None = N
             out.append(f"| {lay} | {oc} | {n:,} |")
         out.append("")
         out.append(_render_reweight(conn))
+        out.append(_render_stability(conn))
         out.append(_render_bimodal(conn))
 
     # ---- 队列

@@ -69,11 +69,87 @@ GROUP BY 1, 2
 
 LAYERS = ("dns_ok", "tcp_ok", "http_ok", "proto_ok")
 
+# L3-stable：同一个端点【两轮都】协议层通过。
+# 注意是按端点逐个求交集，不是「两轮各自的通过数」—— 两轮各通过 17,000 个
+# 但不是同一批，也会得出同样的总数，而那根本不叫稳定。
+_STABLE_SQL = """
+WITH universe AS (
+    SELECT s.endpoint_host AS host, count(*) AS n_total
+    FROM service s
+    WHERE s.is_routable AND s.endpoint_host IS NOT NULL
+    GROUP BY 1
+),
+ep AS (
+    SELECT sv.endpoint_host AS host, p.chain_id, p.agent_id, p.service_idx,
+           max(CASE WHEN p.layer='proto' AND p.outcome='ok' AND p.probe_round=1
+                    THEN 1 ELSE 0 END) AS r1,
+           max(CASE WHEN p.layer='proto' AND p.outcome='ok' AND p.probe_round=2
+                    THEN 1 ELSE 0 END) AS r2
+    FROM probe_attempt p
+    JOIN service sv ON sv.chain_id = p.chain_id AND sv.agent_id = p.agent_id
+                   AND sv.service_idx = p.service_idx
+    GROUP BY 1, 2, 3, 4
+)
+SELECT u.host, u.n_total,
+       count(ep.host)                                            AS n_probed,
+       sum(ep.r1)                                                AS round1_ok,
+       sum(ep.r2)                                                AS round2_ok,
+       sum(CASE WHEN ep.r1 = 1 AND ep.r2 = 1 THEN 1 ELSE 0 END)  AS stable_ok
+FROM universe u
+LEFT JOIN ep ON ep.host = u.host
+GROUP BY 1, 2
+"""
+
+STABLE_LAYERS = ("round1_ok", "round2_ok", "stable_ok")
+
 
 def strata(conn, probe_round: int = 1) -> list[dict]:
     rows = conn.execute(_STRATA_SQL, [probe_round]).fetchall()
     cols = [d[0] for d in conn.description]
     return [dict(zip(cols, r)) for r in rows]
+
+
+def strata_stable(conn) -> list[dict]:
+    rows = conn.execute(_STABLE_SQL).fetchall()
+    cols = [d[0] for d in conn.description]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def reweight_stable(conn) -> dict:
+    """两轮对照 + 按 host 规模回权。→ 每个口径的样本比例与全集估计。
+
+    `stable_ok` 是最终结论用的那个数：同一端点相隔 ≥48h 两次都通过。
+    单轮通过可能只是那一刻正好在线；两轮都通过才排除得掉临时故障。
+    """
+    st = strata_stable(conn)
+    covered = [s for s in st if (s["n_probed"] or 0) > 0]
+    n_universe = sum(s["n_total"] for s in st)
+    n_covered = sum(s["n_total"] for s in covered)
+    n_probed = sum(s["n_probed"] or 0 for s in covered)
+
+    out: dict = {
+        "endpoints_universe": n_universe,
+        "endpoints_in_covered_hosts": n_covered,
+        "endpoints_probed": n_probed,
+        "endpoints_unprobed": n_universe - n_probed,
+        "hosts_covered": len(covered),
+        "layers": {},
+    }
+    for layer in STABLE_LAYERS:
+        ok = sum(s[layer] or 0 for s in covered)
+        raw = Decimal(ok) / Decimal(n_probed) if n_probed else Decimal(0)
+        est = sum(Decimal(s["n_total"]) * Decimal(s[layer] or 0) / Decimal(s["n_probed"])
+                  for s in covered)
+        out["layers"][layer] = {
+            "ok_in_sample": ok,
+            "raw_share": raw,
+            "weighted_endpoints": est,
+            "weighted_share": (est / Decimal(n_covered)) if n_covered else Decimal(0),
+        }
+    r1 = out["layers"]["round1_ok"]["ok_in_sample"]
+    stable = out["layers"]["stable_ok"]["ok_in_sample"]
+    out["persistence"] = (Decimal(stable) / Decimal(r1)) if r1 else Decimal(0)
+    return out
 
 
 def reweight(conn, probe_round: int = 1) -> dict:

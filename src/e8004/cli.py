@@ -998,6 +998,26 @@ def report(snapshot: str = typer.Option(..., "--snapshot")):
     n2 = conn.execute("SELECT count(*) FROM probe_attempt WHERE probe_round = 2").fetchone()[0]
     if not n2:
         lims.append("只做了第 1 轮探测。L3-stable（两轮均通过）需要间隔 ≥48h 的第 2 轮。")
+    # L4/L5 只在【扫到了 ReputationRegistry 日志】的链上可测。
+    # 不写清楚的话，1,668 / 392,258 = 0.43% 会被读成全量比例，
+    # 而实际分母只有那几条链 —— 又一次覆盖率稀释。
+    fb_chains = [r[0] for r in conn.execute(
+        "SELECT DISTINCT chain_id FROM ev_feedback ORDER BY 1").fetchall()]
+    if fb_chains:
+        row = conn.execute(
+            "SELECT count(*) FROM agent_state WHERE snapshot_id = ? AND chain_id IN "
+            "({})".format(",".join("?" for _ in fb_chains)),
+            [snapshot, *fb_chains],
+        ).fetchone()
+        n_cov = row[0] if row else 0
+        tot = conn.execute(
+            "SELECT count(*) FROM agent_state WHERE snapshot_id = ?", [snapshot]).fetchone()[0]
+        lims.append(
+            f"**L4/L5 只覆盖 {len(fb_chains)} 条链的 {n_cov:,} 个 agent"
+            f"（占全量 {100 * n_cov / max(1, tot):.1f}%）**：反馈事件要扫 ReputationRegistry 的"
+            "历史日志，而只有部分链的公共 RPC 能提供。L4 的比例**必须以这些链为分母**，"
+            "以 L0 全量为分母会严重低估。其余链尚未扫描，不等于其上没有反馈。"
+        )
     ipfs_bad = conn.execute(
         "SELECT count(*) FROM uri_fetch WHERE status = 'ipfs_unresolvable'"
     ).fetchone()[0]

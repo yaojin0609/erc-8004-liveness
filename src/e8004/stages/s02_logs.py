@@ -166,7 +166,7 @@ async def scan_chain(
     spool = spool or Spool(cfg.root, STAGE)
     stats = {"chain": chain.name, "logs": 0, "decoded": 0, "unknown_topic": 0, "by_event": {}}
 
-    async with RpcClient(chain.rpcs, user_agent=cfg.user_agent, chain_id=chain.chain_id) as rpc:
+    async with RpcClient(chain.rpcs_for_logs, user_agent=cfg.user_agent, chain_id=chain.chain_id) as rpc:
         head = to_block or await rpc.safe_head(chain.confirmations, chain.supports_finalized)
         start = from_block if from_block is not None else (chain.deploy_block or 0)
         stats["from_block"], stats["to_block"] = start, head
@@ -304,7 +304,7 @@ async def census_registry(cfg: Config, chain: ChainConfig, label: str, address: 
     from .s01_bootstrap import inspect_address
 
     sig_topic = topic0("Registered(uint256,string,address)")
-    async with RpcClient(chain.rpcs, user_agent=cfg.user_agent, chain_id=chain.chain_id) as rpc:
+    async with RpcClient(chain.rpcs_for_logs, user_agent=cfg.user_agent, chain_id=chain.chain_id) as rpc:
         head = await rpc.safe_head(chain.confirmations, chain.supports_finalized)
         info = await inspect_address(rpc, label, address, head=head, probe_window=1)
         out = {

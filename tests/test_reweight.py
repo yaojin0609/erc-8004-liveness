@@ -134,3 +134,57 @@ def test_largest_hosts_sorted_by_endpoint_count_not_sample(conn):
 
     top = largest_hosts(conn, probe_round=1)
     assert [h["host"] for h in top] == ["big.test", "mid.test"]
+
+
+# --------------------------------------------------- 两轮对照（L3-stable）
+
+def _probe(conn, aid, layer, outcome, rnd):
+    conn.execute(
+        "INSERT INTO probe_attempt (probe_round, chain_id, agent_id, service_idx,"
+        " layer, outcome) VALUES (?, 1, ?, 0, ?, ?)", [rnd, aid, layer, outcome])
+
+
+def test_stable_requires_same_endpoint_in_both_rounds(conn):
+    """两轮各通过 2 个但不是同一批 → L3-stable 必须是 0，不是 2。
+
+    只比较两轮的【总数】会得出「稳定」的错觉，这正是 48h 双轮要排除的情形。
+    """
+    from e8004.analysis.reweight import reweight_stable
+
+    for i in range(4):
+        conn.execute(
+            "INSERT INTO service VALUES (1, ?, 0, 'a2a', ?, '1.0', 'h.test', 'https', true)",
+            [i, f"https://h.test/{i}"])
+    # 第 1 轮：0,1 通过；第 2 轮：2,3 通过 —— 交集为空
+    for i in (0, 1):
+        _probe(conn, i, "proto", "ok", 1)
+        _probe(conn, i, "proto", "fail", 2)
+    for i in (2, 3):
+        _probe(conn, i, "proto", "fail", 1)
+        _probe(conn, i, "proto", "ok", 2)
+
+    r = reweight_stable(conn)
+    assert r["layers"]["round1_ok"]["ok_in_sample"] == 2
+    assert r["layers"]["round2_ok"]["ok_in_sample"] == 2
+    assert r["layers"]["stable_ok"]["ok_in_sample"] == 0     # 关键
+    assert r["persistence"] == 0
+
+
+def test_stable_counts_endpoints_passing_both(conn):
+    from e8004.analysis.reweight import reweight_stable
+
+    for i in range(4):
+        conn.execute(
+            "INSERT INTO service VALUES (1, ?, 0, 'a2a', ?, '1.0', 'h.test', 'https', true)",
+            [i, f"https://h.test/{i}"])
+    for i in (0, 1, 2):
+        _probe(conn, i, "proto", "ok", 1)
+    for i in (0, 1):                       # 2 号第 2 轮掉了
+        _probe(conn, i, "proto", "ok", 2)
+    _probe(conn, 2, "proto", "fail", 2)
+    _probe(conn, 3, "proto", "fail", 1)
+    _probe(conn, 3, "proto", "fail", 2)
+
+    r = reweight_stable(conn)
+    assert r["layers"]["stable_ok"]["ok_in_sample"] == 2
+    assert r["persistence"] == pytest.approx(Decimal("2") / Decimal("3"), abs=Decimal("0.01"))

@@ -59,6 +59,13 @@ class RpcError(Exception):
         return f"{self.message}".lower()
 
     @property
+    def is_batch_too_large(self) -> bool:
+        """批量调用条数超限。各家上限不同且不公布，只能按报错文本认。"""
+        b = self._blob
+        return ("in 1 batch" in b or "batch size" in b or "too many requests in batch" in b
+                or "batch too large" in b or self.code == -32014)
+
+    @property
     def is_range_error(self) -> bool:
         blob = self._blob
         if any(h in blob for h in _RANGE_HINTS):
@@ -109,6 +116,7 @@ class RpcClient:
         self.min_interval = min_interval
         self._idx = 0
         self._last_call: dict[str, float] = {}
+        self._ts_chunk = 100      # 区块时间戳的批大小，撞到端点上限会自适应下调
         # 端点健康度：连续失败到阈值就隔离一段时间。
         # 只轮转不淘汰的话，坏端点会被反复转回来，把重试预算烧光。
         self._fails: dict[str, int] = {}
@@ -309,15 +317,31 @@ class RpcClient:
         return max(0, await self.block_number() - confirmations)
 
     async def get_block_timestamps(self, blocks: list[int]) -> dict[int, int]:
-        """批量取区块时间戳。"""
+        """批量取区块时间戳。批大小遇到上限就自适应缩小。
+
+        【为什么要自适应】各家 RPC 的 batch 上限差别很大且不公布：
+        mainnet.base.org 只allow 10 个调用，超了直接 -32014 报错，
+        整条链的扫描随之崩掉（实测 base 因此全军覆没一次）。
+        固定 CHUNK 只要碰上更严格的端点就再挂一次，所以按错误信息回退。
+        """
         out: dict[int, int] = {}
-        CHUNK = 100
-        for i in range(0, len(blocks), CHUNK):
-            chunk = blocks[i : i + CHUNK]
-            res = await self.batch([("eth_getBlockByNumber", [hex(b), False]) for b in chunk])
+        chunk_size = self._ts_chunk
+        i = 0
+        while i < len(blocks):
+            chunk = blocks[i : i + chunk_size]
+            try:
+                res = await self.batch([("eth_getBlockByNumber", [hex(b), False]) for b in chunk])
+            except RpcError as e:
+                if chunk_size > 1 and e.is_batch_too_large:
+                    chunk_size = max(1, chunk_size // 4)
+                    self._ts_chunk = chunk_size      # 记住，别每批都撞一次
+                    log.info("batch_size_reduced", new_size=chunk_size, msg=e.message[:60])
+                    continue
+                raise
             for b, r in zip(chunk, res):
                 if isinstance(r, dict) and r.get("timestamp"):
                     out[b] = int(r["timestamp"], 16)
+            i += len(chunk)
         return out
 
     # --------------------------------------------------------- deploy block
