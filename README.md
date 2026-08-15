@@ -67,7 +67,7 @@ uv run e8004 report --snapshot 2026-08-10
 
 ### `verify-coverage`：为什么它是门槛而不是可选项
 
-**RPC 端点静默丢日志，在本仓发生过三次，三次都「看起来成功了」：**
+**RPC 端点静默丢日志，在本仓发生过多次，每次都「看起来成功了」：**
 
 | 链 | 表现 | 真相 |
 |---|---|---|
@@ -78,6 +78,9 @@ uv run e8004 report --snapshot 2026-08-10
 共同点是**扫描自己发现不了**。所以对账不能依赖 RPC 是否诚实，只能用数据本身的性质：
 `agentId` 从 0 顺序递增 ⇒ 有注册记录的 agent 数必须等于普查数。
 纯 SQL，不碰网络，`--strict` 可挂进流水线当门槛。
+
+完整的八次实录、各自的成因与修复、以及各链公共 RPC 的实测端点清单，见
+[**docs/链上索引的静默数据损坏.md**](docs/链上索引的静默数据损坏.md)。
 
 ### 关于注册时间：两条路径
 
@@ -211,6 +214,7 @@ for r in asyncio.run(probe_many([ProbeTarget(u,'web') for u in urls], cfg)):
 | [docs/接口契约.md](docs/接口契约.md) | CLI 命令面、库边界、probe 输出 schema |
 | [docs/schema.sql](docs/schema.sql) | DuckDB 建表 DDL |
 | [docs/开发排期与验收.md](docs/开发排期与验收.md) | ticket 拆分与 DoD |
+| [docs/链上索引的静默数据损坏.md](docs/链上索引的静默数据损坏.md) | **八次「看起来成功了」的数据损坏实录**：成因、修复、以及各链公共 RPC 的实测端点清单 |
 
 ## 架构要点
 
