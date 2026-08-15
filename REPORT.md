@@ -2,8 +2,9 @@
 
 > 快照日期 2026-08-10 ｜ 12 条链全量扫描 ｜ 扫描器与原始数据集：<https://github.com/yaojin0609/ERC-800>
 >
-> 本文是结论与方法的叙述版。逐层数字、口径定义、已知局限见同目录的
-> [`report-2026-08-10.md`](report-2026-08-10.md)（机器生成，可复跑）。
+> 本文是结论与方法的叙述版，手写。逐层数字、口径定义、已知局限见
+> [`data/export/report-2026-08-10.md`](data/export/report-2026-08-10.md)
+> —— 那份由流水线生成，每次复跑都会重写。
 
 ---
 
@@ -231,7 +232,9 @@ ERC8004-Research-Scanner/1.0 (+https://github.com/yaojin0609/ERC-800; <联系邮
 ## 数据与代码
 
 - 扫描器与完整方法论：<https://github.com/yaojin0609/ERC-800>
-- 机器生成的逐层数据报告：[`report-2026-08-10.md`](report-2026-08-10.md)
+- 机器生成的逐层数据报告：[`data/export/report-2026-08-10.md`](data/export/report-2026-08-10.md)
+- 扫描过程中遇到的八次静默数据损坏（成因、修复、各链端点实测清单）：
+  [`docs/silent-data-corruption.md`](docs/silent-data-corruption.md)
 - 快照锚定在各链的具体区块高度上，见数据报告末尾
 
 许可 MIT。欢迎复现、质疑、指出错误。

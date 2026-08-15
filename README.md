@@ -2,6 +2,15 @@
 
 一个可复跑的扫描器，回答一个问题：**链上注册的 ERC-8004 agent 身份里，有多少是真的活着的？**
 
+> ### 📄 [**报告：39 万个 ERC-8004 身份，有多少是真活着的**](REPORT.md)
+>
+> 快照 2026-08-10，12 条链全量。**39.2 万**个注册身份里，21.3% 声明了可路由的
+> 服务端点；已探测的身份中 **47.6%** 的端点在相隔 48 小时的两次探测中都完成了
+> 协议层握手（按主机规模回权到全集估计 38.6%）。
+>
+> 另有一篇不依赖本协议语境的技术记录：
+> [**链上索引的静默数据损坏：八次「看起来成功了」**](docs/silent-data-corruption.md)
+
 产出是一张漏斗表 —— 从「链上注册了」一层层筛到「服务端点真的能握手」，
 每一层的存活率就是结论的骨架。
 
@@ -80,7 +89,7 @@ uv run e8004 report --snapshot 2026-08-10
 纯 SQL，不碰网络，`--strict` 可挂进流水线当门槛。
 
 完整的八次实录、各自的成因与修复、以及各链公共 RPC 的实测端点清单，见
-[**docs/链上索引的静默数据损坏.md**](docs/链上索引的静默数据损坏.md)。
+[**docs/silent-data-corruption.md**](docs/silent-data-corruption.md)。
 
 ### 关于注册时间：两条路径
 
@@ -209,12 +218,14 @@ for r in asyncio.run(probe_many([ProbeTarget(u,'web') for u in urls], cfg)):
 
 | 文件 | 内容 |
 |---|---|
+| [**REPORT.md**](REPORT.md) | **报告正文**（手写，面向读者） |
+| [data/export/report-2026-08-10.md](data/export/report-2026-08-10.md) | 逐层数据报告（流水线生成，每次复跑重写） |
 | [CLAUDE.md](CLAUDE.md) | 开发入口：阅读顺序 + 硬约束清单 |
 | [docs/实施规划.md](docs/实施规划.md) | 架构、技术栈、各 stage 行为规格、算法 |
 | [docs/接口契约.md](docs/接口契约.md) | CLI 命令面、库边界、probe 输出 schema |
 | [docs/schema.sql](docs/schema.sql) | DuckDB 建表 DDL |
 | [docs/开发排期与验收.md](docs/开发排期与验收.md) | ticket 拆分与 DoD |
-| [docs/链上索引的静默数据损坏.md](docs/链上索引的静默数据损坏.md) | **八次「看起来成功了」的数据损坏实录**：成因、修复、以及各链公共 RPC 的实测端点清单 |
+| [docs/silent-data-corruption.md](docs/silent-data-corruption.md) | **八次「看起来成功了」的数据损坏实录**：成因、修复、以及各链公共 RPC 的实测端点清单 |
 
 ## 架构要点
 
