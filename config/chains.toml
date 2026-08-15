@@ -100,6 +100,11 @@ rpcs = [
 confirmations = 30
 supports_finalized = true
 max_log_range = 5000         # BSC 的 range 限制普遍更紧
+# 实测（2026-08-15）BSC 上能拿部署期历史日志的公共端点【只有这一个】：
+#   publicnode 403 / 四个 dataseed 全 -32005 limit exceeded / meowrpc 不支持
+#   eth_getLogs / 1rpc 拒绝 / drpc 可用但极易 429 / blockrazor 连 1000 跨度都超限
+# blxrbdn 上限 5,000 跨度、约 1.4s/次，36.2M 区块全程约 2.8 小时。
+log_rpcs = ["https://bsc.rpc.blxrbdn.com", "https://bsc.drpc.org"]
 
 # ---------------------------------------------------------------------------
 # Tier B —— 人口普查（P1，排期告急时整体砍掉）

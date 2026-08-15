@@ -239,6 +239,9 @@ def scan_logs(
     from_block: int = typer.Option(None, "--from-block"),
     to_block: int = typer.Option(None, "--to-block"),
     resume: bool = typer.Option(True, "--resume/--no-resume"),
+    registry: str = typer.Option(None, "--registry",
+                                 help="只扫某个注册表：identity | reputation。"
+                                      "留空则两个都扫"),
 ):
     """T1/T2：全量事件扫描。写 spool，扫完跑 `e8004 load scan-logs`。"""
     from .stages.s02_logs import STAGE, scan_chain
@@ -267,7 +270,8 @@ def scan_logs(
             last_report[0] = done
 
     async def run():
-        return await scan_chain(cfg, ch, from_block=start, to_block=to_block, progress=progress)
+        return await scan_chain(cfg, ch, from_block=start, to_block=to_block,
+                                progress=progress, registry_filter=registry)
 
     stats = asyncio.run(run())
     console.print(f"\n[green]✓[/green] {ch.name}: {stats['logs']:,} 条日志 / 解码 {stats['decoded']:,}")

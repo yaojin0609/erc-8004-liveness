@@ -151,11 +151,26 @@ async def scan_chain(
     events: list[str] | None = None,
     spool: Spool | None = None,
     progress=None,
+    registry_filter: str | None = None,
 ) -> dict:
-    """扫描一条链。返回统计信息。"""
+    """扫描一条链。返回统计信息。
+
+    `registry_filter` 限定只扫某一个注册表（'identity' / 'reputation'）。
+    请求次数由【区块跨度】决定，不由日志条数决定，所以过滤合约不会减少请求数；
+    但返回的日志少了，区块时间戳补全的工作量会成比例下降 —— BSC 有 26 万个
+    agent，连 IdentityRegistry 一起扫会拉回海量已知数据（注册信息早已由
+    scan-mints 拿到），只为了 L4 的话完全是浪费。
+    """
     reg = cfg.registries_for(chain)
     registry = EventRegistry(cfg.abis)
-    addresses = reg.addresses()
+    if registry_filter == "identity":
+        addresses = [reg.identity]
+    elif registry_filter == "reputation":
+        if not reg.reputation:
+            raise ValueError(f"{chain.name} 没有配置 ReputationRegistry 地址")
+        addresses = [reg.reputation]
+    else:
+        addresses = reg.addresses()
 
     # Tier B 只做人口普查：Registered + Transfer（销毁判定需要）
     if events is None:
@@ -278,7 +293,10 @@ async def scan_chain(
         # 金丝雀校验有可能整个被跳过（找不到金丝雀时），所以不能只靠它。
         # 链上确实存在 token 却一条日志都没扫到，只可能是端点在静默说谎 ——
         # 这时候【必须报错】，不许安安静静地返回一份空数据集。
-        if stats["logs"] == 0:
+        # 【只在扫 IdentityRegistry 时成立】反证用的是 ownerOf(0)，那是身份注册表的
+        # 状态。只扫 ReputationRegistry 时「0 条日志」完全可能是真的 ——
+        # 那条链上就是没人留过反馈 —— 这时候报错是误杀。
+        if stats["logs"] == 0 and registry_filter != "reputation":
             exists = await _token_zero_exists(rpc, reg.identity)
             if exists:
                 raise RuntimeError(
