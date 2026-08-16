@@ -126,3 +126,41 @@ def test_batch_too_large_detection(msg, code, expected):
     from e8004.rpc import RpcError
 
     assert RpcError(code, msg, "batch").is_batch_too_large is expected
+
+
+# ------------------------------- 金丝雀失效时必须 fail closed，不能默默继续
+
+class CanaryRpc:
+    """没有任何 Registered 日志的端点；ownerOf(0) 是否返回持有者可控。"""
+
+    def __init__(self, has_token: bool):
+        self.has_token = has_token
+
+    async def call(self, method, params):
+        if method == "eth_getLogs":
+            return []                      # 永远找不到金丝雀
+        if method == "eth_call":
+            if not self.has_token:
+                raise RuntimeError("execution reverted")
+            return "0x" + "00" * 12 + "aa" * 20
+        raise AssertionError(method)
+
+
+def test_no_canary_but_token_exists_must_raise():
+    """校验器自身失效 ≠ 校验通过。
+
+    scroll 就是这么丢的：金丝雀探测够不到它的注册活动区间，端点校验被【整个
+    跳过】，一个静默返空的端点畅通无阻，最后报告「✓ 0 条日志」。
+    把探测窗口调多调宽只提高命中概率，堵不住这个漏 —— 必须改默认行为。
+    """
+    rpc = CanaryRpc(has_token=True)
+    assert asyncio.run(_token_zero_exists(rpc, IDENT)) is True
+    # 有 token 却一个金丝雀都找不到 → scan_chain 必须拒绝扫描
+    assert asyncio.run(_find_canary_block(rpc, IDENT, 1_000_000, 10_000, 0)) is None
+
+
+def test_no_canary_and_no_token_is_legitimately_empty():
+    """该注册表上本来就没有 token 时，0 条日志是真的，不该报错。"""
+    rpc = CanaryRpc(has_token=False)
+    assert asyncio.run(_token_zero_exists(rpc, IDENT)) is False
+    assert asyncio.run(_find_canary_block(rpc, IDENT, 1_000_000, 10_000, 0)) is None

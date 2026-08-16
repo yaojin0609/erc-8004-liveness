@@ -152,6 +152,7 @@ async def scan_chain(
     spool: Spool | None = None,
     progress=None,
     registry_filter: str | None = None,
+    allow_unverified: bool = False,
 ) -> dict:
     """扫描一条链。返回统计信息。
 
@@ -201,7 +202,28 @@ async def scan_chain(
             if not rpc.urls:
                 raise RuntimeError("所有 RPC 端点都无法可信地返回日志，拒绝产出可能不完整的数据")
         else:
-            stats["endpoint_verdicts"] = {"_": "no_canary_found"}
+            # 【找不到金丝雀必须 fail closed，不能默默继续】
+            #
+            # 原来这里只记一句 no_canary_found 就往下扫 —— 于是「校验器自身失效」
+            # 等同于「校验通过」。scroll 就是这么丢的：金丝雀探测范围够不到它的
+            # 注册活动区间，校验被整个跳过，一个静默返空的端点畅通无阻，
+            # 最后报告「✓ 0 条日志」。
+            #
+            # 把探测窗口调多调宽只是提高命中概率，堵不住这个漏。真正的修复是
+            # 改默认行为：拿 ownerOf(0) 走 eth_call 独立判断这个注册表上到底
+            # 有没有 token —— 有 token 就必然有过 Registered 日志，那么
+            # 「一个金丝雀都找不到」只可能是端点不给日志，拒绝扫描。
+            if not allow_unverified and await _token_zero_exists(rpc, reg.identity):
+                raise RuntimeError(
+                    f"{chain.name}: 在 [{start:,}, {head:,}] 内找不到任何 Registered 日志"
+                    f"做金丝雀，但 ownerOf(0) 能返回持有者 —— 该注册表上确实有 token，"
+                    "所以端点完整性无法验证。拒绝扫描，以免产出静默残缺的数据集。\n"
+                    "  排查：换端点、缩小 max_log_range、或确认 --from-block 是否定得太晚。\n"
+                    "  确知无误要强扫：scan-logs --allow-unverified-endpoints"
+                )
+            stats["endpoint_verdicts"] = {
+                "_": "no_canary_found" if allow_unverified else "no_canary_and_no_token"
+            }
 
         ts_cache: dict[int, int] = {}
         pending_ts: set[int] = set()

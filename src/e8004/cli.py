@@ -242,6 +242,9 @@ def scan_logs(
     registry: str = typer.Option(None, "--registry",
                                  help="只扫某个注册表：identity | reputation。"
                                       "留空则两个都扫"),
+    allow_unverified: bool = typer.Option(
+        False, "--allow-unverified-endpoints",
+        help="找不到金丝雀时仍然扫描。【默认拒绝】—— 校验器失效不等于校验通过"),
 ):
     """T1/T2：全量事件扫描。写 spool，扫完跑 `e8004 load scan-logs`。"""
     from .stages.s02_logs import STAGE, scan_chain
@@ -271,7 +274,8 @@ def scan_logs(
 
     async def run():
         return await scan_chain(cfg, ch, from_block=start, to_block=to_block,
-                                progress=progress, registry_filter=registry)
+                                progress=progress, registry_filter=registry,
+                                allow_unverified=allow_unverified)
 
     stats = asyncio.run(run())
     console.print(f"\n[green]✓[/green] {ch.name}: {stats['logs']:,} 条日志 / 解码 {stats['decoded']:,}")
@@ -421,8 +425,11 @@ def snapshot_state(
 
 
 @app.command("verify-coverage")
-def verify_coverage(strict: bool = typer.Option(False, "--strict",
-                                                help="有缺口就以非零码退出，可挂进流水线当门槛")):
+def verify_coverage(
+    strict: bool = typer.Option(False, "--strict",
+                                help="有缺口就以非零码退出，可挂进流水线当门槛"),
+    snapshot: str = typer.Option(None, "--snapshot", help="留空则用库里最新的快照"),
+):
     """核对注册记录的完整性。纯 SQL，不碰网络。
 
     【为什么需要这个】RPC 端点静默丢日志已经在本仓发生三次：flashbots 对历史区间
@@ -435,6 +442,13 @@ def verify_coverage(strict: bool = typer.Option(False, "--strict",
     两条都不依赖 RPC 是否诚实。
     """
     conn = _conn()
+    if not snapshot:
+        row = conn.execute("SELECT max(snapshot_id) FROM agent_state").fetchone()
+        snapshot = row[0] if row else None
+    if not snapshot:
+        console.print("[yellow]没有任何快照，无从核对[/yellow]")
+        conn.close()
+        return
     rows = conn.execute("""
         WITH reg AS (
             SELECT chain_id, agent_id FROM ev_registered
@@ -447,8 +461,9 @@ def verify_coverage(strict: bool = typer.Option(False, "--strict",
                max(s.agent_id)                AS max_id
         FROM agent_state s
         LEFT JOIN reg r ON r.chain_id = s.chain_id AND r.agent_id = s.agent_id
+        WHERE s.snapshot_id = ?
         GROUP BY 1 ORDER BY 2 DESC
-    """).fetchall()
+    """, [snapshot]).fetchall()
 
     t = Table("chain", "普查", "有注册记录", "缺口", "最大 agent_id", "结论")
     bad = 0
@@ -460,16 +475,66 @@ def verify_coverage(strict: bool = typer.Option(False, "--strict",
                   "[green]完整[/green]" if gap <= 0 else f"[red]缺 {100*gap/census:.1f}%[/red]")
     console.print(t)
 
+    # ---- 第二道：普查本身有没有被截断 ----
+    #
+    # 上面那张表是 FROM agent_state LEFT JOIN 注册记录 —— 分母是普查。
+    # 于是普查【自己】被截断时，缺失的注册记录也不会被计入，缺口照样显示 0。
+    # 这是最危险的失败模式：门槛给出绿灯，而数据实际是缺的。
+    #
+    # 用注册记录反过来查普查：注册记录里出现了超过普查最大 id 的 agent，
+    # 只有两种可能 —— 快照之后的新注册（正常），或普查提前收敛（bug）。
+    # 按注册时间区分这两者。
+    # 【用区块号比，不要用时间戳】snapshot 表的 block_timestamp 与日志的
+    # block_timestamp 基准不同（一个是本机时区、一个是链上 UTC），跨时区比较
+    # 会把「快照后的新注册」全部误报成「普查截断」—— 实测就误报了 5 条链。
+    # 区块号在同一条链内是全序的，没有歧义。
+    over = conn.execute("""
+        WITH reg AS (
+            SELECT chain_id, agent_id, block_number FROM ev_registered
+            UNION ALL
+            SELECT chain_id, agent_id, block_number FROM agent_mint
+        ),
+        st AS (SELECT chain_id, max(agent_id) AS max_id FROM agent_state
+               WHERE snapshot_id = ? GROUP BY 1),
+        sn AS (SELECT chain_id, block_number AS anchor FROM snapshot
+               WHERE snapshot_id = ?)
+        SELECT r.chain_id, count(*),
+               sum(CASE WHEN r.block_number <= sn.anchor THEN 1 ELSE 0 END) AS before_anchor,
+               min(r.block_number), sn.anchor
+        FROM reg r
+        JOIN st ON st.chain_id = r.chain_id
+        JOIN sn ON sn.chain_id = r.chain_id
+        WHERE r.agent_id > st.max_id
+        GROUP BY 1, sn.anchor ORDER BY 2 DESC
+    """, [snapshot, snapshot]).fetchall()
+
+    suspect = []
+    if over:
+        t2 = Table("chain", "超出普查的注册", "其中早于快照区块", "最早区块", "快照锚点", "结论")
+        for cid, n, before, minb, anchor in over:
+            if before:
+                suspect.append(cid)
+            t2.add_row(str(cid), f"{n:,}", f"{before:,}", f"{minb:,}", f"{anchor:,}",
+                       "[red]疑似普查截断[/red]" if before else "[green]快照后新注册[/green]")
+        console.print("\n[bold]普查完整性反查[/bold]（注册记录里超出普查最大 id 的部分）")
+        console.print(t2)
+
     if bad:
         console.print(
             f"\n[red]{bad} 条链的注册记录不完整。[/red]这通常【不是】链上真的没有，"
             "而是 RPC 端点静默丢了日志（返空或截断）。"
             "对应链调小 max_log_range 后重扫，别直接引用当前数字。"
         )
+    elif suspect:
+        console.print(
+            f"\n[red]{len(suspect)} 条链的普查可能被截断[/red]：存在【早于快照时刻】"
+            "却超出普查最大 id 的注册记录。上面那张缺口表在这种情况下会假绿 —— "
+            "它以普查为分母，普查少了就一起少。请重跑 count-agents / snapshot-state。"
+        )
     else:
-        console.print("\n[green]✓[/green] 所有链的注册记录数与普查数一致")
+        console.print("\n[green]✓[/green] 所有链的注册记录数与普查数一致，且普查未被截断")
     conn.close()
-    if bad and strict:
+    if (bad or suspect) and strict:
         raise typer.Exit(EXIT_DOD)
 
 
