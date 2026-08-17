@@ -14,6 +14,7 @@
 >
 > 另有一篇不依赖本协议语境的技术记录：
 > [**链上索引的静默数据损坏：八次「看起来成功了」**](docs/silent-data-corruption.md)
+> （English: [Silent data corruption in blockchain indexing](docs/silent-data-corruption.en.md)）
 
 产出是一张漏斗表 —— 从「链上注册了」一层层筛到「服务端点真的能握手」，
 每一层的存活率就是结论的骨架。
@@ -270,6 +271,7 @@ for r in asyncio.run(probe_many([ProbeTarget(u,'web') for u in urls], cfg)):
 | [docs/schema.sql](docs/schema.sql) | DuckDB 建表 DDL |
 | [docs/开发排期与验收.md](docs/开发排期与验收.md) | ticket 拆分与 DoD |
 | [docs/silent-data-corruption.md](docs/silent-data-corruption.md) | **八次「看起来成功了」的数据损坏实录**：成因、修复、以及各链公共 RPC 的实测端点清单 |
+| [docs/silent-data-corruption.en.md](docs/silent-data-corruption.en.md) | English version of the above |
 
 ## 架构要点
 
