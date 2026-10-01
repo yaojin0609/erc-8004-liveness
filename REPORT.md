@@ -175,39 +175,85 @@ ReputationRegistry 的历史日志扫出 **486,196** 条 `NewFeedback`，覆盖
 **Base 持有 16% 的身份，却贡献了 93% 的反馈。**BSC 有全部身份的 67%，
 反馈占比不到 7%。如果反馈反映真实使用，很难解释为什么它如此集中于一条链。
 
-**第三，相当比例的反馈来自本身也持有身份的地址**：以太坊 51.1%，Base 37.2%。
+但这个 93% 里有一大块来自**单一一个 agent**（见第四条）：剔除它之后，Base 仍占
+**82.4%**。方向不变，量级被一个写入源撑大了。
+
+**第三，相当比例的反馈来自本身也持有身份的地址**：以太坊 51.1%，Base 37.2%
+（口径：评价者地址是任意链上某个身份的当前 owner；按反馈条数计。剔除第四条所述的
+单一 agent 后，Base 为 31.3%）。
 这不等于自评（评价对象对不上），但说明反馈主要在生态内部产生，而不是来自外部
 使用者。
 
-**第四，反馈的完整性绑定大面积缺失。** 规范里 `feedbackURI` 指向链下的反馈内容，
-`feedbackHash` 是该内容的 keccak256——两者都是可选的。实测 486,196 条反馈：
+**第四，反馈的条数被极少数自动化写入者主导——按条数算的任何比例都要先分层。**
 
-| | 条数 | 占比 |
+单一一个 agent——Base 上的 agentId 25975（一个挖矿协调器）——收到了 **300,339 条**
+反馈，占全部 486,196 条的 **61.8%**，全部来自 **62 个地址**，`tag1` 全是 `miner-vouch`，
+是挖矿回执的自动化流水。任何按条数计算的反馈比例，首先描述的是这一个写入源。
+
+规范里 `feedbackURI` 指向链下反馈内容，`feedbackHash` 是该内容的 keccak256，两者都可选。
+按条数看，四种组合的分布是这样的——但每一类都被少数写入者主导：
+
+| 组合 | 条数 | 占比 | 主导来源 |
+|---|---:|---:|---|
+| URI + 非零 hash | 100,886 | 20.75% | 单一地址占 47.4% |
+| URI、无 hash | 303,454 | 62.41% | **单一 agent（25975）占 99.0%** |
+| 无 URI、有 hash | 55,129 | 11.34% | 前 5 个地址占 93.1% |
+| 皆无 | 26,727 | 5.50% | 单一地址占 39.6% |
+
+正确的单位是**写入者**（`clientAddress`）。13,384 个写入者里，**94.4% 的人 100% 只用
+同一种组合**——字段用法是写入者的属性，不是反馈记录的属性，与"存活是运营商的属性"
+同构。按写入者计：
+
+| | 写入者数 | 占比 |
 |---|---:|---:|
-| 有 `feedbackURI` | 404,340 | 83.16% |
-| URI **且**有非零 `feedbackHash` | 100,886 | 20.75% |
-| 有 URI、**无** hash | 303,454 | **62.41%** |
-| **无 URI、却有 hash** | 55,129 | 11.34% |
-| 两者皆无 | 26,727 | 5.50% |
+| 写过带 URI 的反馈 | 9,453 | — |
+| 　其中 URI **总是**配非零 hash | 8,530 | **90.2%** |
+| 　其中**从不**配 hash | 784 | 8.3% |
+| 　混用 | 139 | 1.5% |
 
-也就是说：**链下内容确实被引用了（83%），但大多没有被绑定（62% 有 URI 无 hash）。**
-在 Base 这条贡献了 93% 反馈的链上，"有 URI 无 hash"占 66.85%——这些反馈内容
-在提交之后被替换掉，链上不会留下任何痕迹。
+**也就是说：在用 `feedbackURI` 的写入者里，配上完整性哈希是常态。**"有 URI 无 hash"
+在条数上占 62%，几乎全部来自一个 agent 的挖矿回执。
 
-最后一行是反常项：55,129 条反馈带着非零 `feedbackHash`，`feedbackURI` 却是空的——
-一个指向不了任何内容的哈希。为排除本仓解码错误，取一条独立从链上重新解码核对过：
+"无 URI、有 hash"——一个指向不了任何内容的哈希——同样是写入者指纹而不是习惯：
+只有 294 个写入者（2.2%），前 5 个占这类记录的 93.1%，排第一的地址
+`0xf653068677a9a26d5911da8abd1500d043ec807e` 一个就写了 22,686 条、横扫大量 agent，
+`tag1` 多为 `trust` / `liveness`。为排除本仓解码错误，取一条独立从链上重新解码核对过：
 以太坊 tx `0xc1b71838…de944`、log_index 1001、agent 12518、`tag1="starred"`，
-链上 `feedbackURI` 长度确为 0，`feedbackHash` 为 `0x41fcd21e…`，与入库值逐字节一致。
+链上 `feedbackURI` 长度确为 0，`feedbackHash` 为 `0x41fcd21e…`，与入库值逐字节一致
+（该交易后来也被第三方在公共节点上独立复现）。
 
-这组数字是纯 SQL，可直接对数据集复跑：
+按条数与按写入者两种口径都是纯 SQL，可直接对数据集复跑：
 
 ```sql
+-- 按条数
 SELECT feedback_uri  IS NOT NULL AND feedback_uri  <> ''                 AS has_uri,
        feedback_hash IS NOT NULL AND feedback_hash <> ''
          AND feedback_hash <> '0x' || repeat('0', 64)                    AS has_hash,
        count(*)
 FROM ev_feedback GROUP BY 1, 2 ORDER BY 1 DESC, 2 DESC;
+
+-- 按写入者：用过 URI 的地址里，总是 / 从不 / 混用 配 hash
+WITH f AS (
+  SELECT client_address,
+         feedback_uri IS NOT NULL AND feedback_uri <> ''                 AS has_uri,
+         feedback_hash IS NOT NULL AND feedback_hash <> ''
+           AND feedback_hash <> '0x' || repeat('0', 64)                  AS has_hash
+  FROM ev_feedback),
+w AS (
+  SELECT client_address,
+         count(*) FILTER (WHERE has_uri AND has_hash)     AS paired,
+         count(*) FILTER (WHERE has_uri AND NOT has_hash) AS unpaired
+  FROM f GROUP BY 1)
+SELECT CASE WHEN unpaired = 0 THEN 'always' WHEN paired = 0 THEN 'never' ELSE 'mixed' END,
+       count(*)
+FROM w WHERE paired + unpaired > 0 GROUP BY 1;
 ```
+
+> **更正记录（2026-10-01）**：本条原标题为"反馈的完整性绑定大面积缺失"，依据是按条数
+> 计算的"62.41% 有 URI 无 hash（Base 上 66.85%）"。那个比例 99.0% 来自单一 agent 的
+> 挖矿回执，在写入者层面结论相反（90.2% 总是配 hash），原结论撤回。第二、三条的
+> Base 数字同样受该 agent 影响，已补上剔除后的值。第一条是按身份计算的，不受影响。
+> 原数字曾在 Ethereum Magicians 主帖 #390 引用，已在该帖下公开更正。
 
 **结论：本文不把 L4 当作活性的独立证据。**"有多少被第三方验证过"是一个比
 "有多少能握手"强得多的主张，现有数据支撑不了它。这一层需要的是反馈内容与
